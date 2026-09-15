@@ -8,27 +8,23 @@ public sealed class ChromaDatabase : IVectorDatabase
 {
     private readonly ChromaTransport _transport;
     private readonly ChromaOptions _options;
+    private readonly ChromaServerManager _serverManager;
 
-    public ChromaDatabase(
-        CrideApi api,
-        ProviderInfo providerInfo)
+    public ChromaDatabase(CrideApi api, ProviderInfo providerInfo)
     {
-        var endPoint =
-            providerInfo.Extensions.VectorDBEndPoint
-            ?? throw new InvalidOperationException(
-                "VectorDBEndPoint must be configured when using ChromaDB.");
-
         _options = new ChromaOptions
         {
-            EndPoint = endPoint,
-
-            ApiKey =
-                providerInfo.Extensions.VectorDBApiKey
+            EndPoint = providerInfo.Extensions.VectorDBEndPoint ?? new Uri("http://127.0.0.1:8000"),
+            ApiKey = providerInfo.Extensions.VectorDBApiKey,
+            AutoStart = providerInfo.Extensions.AutoStartVectorDB,
+            RuntimePath = providerInfo.Extensions.VectorDBRuntimePath
+                ?? Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb"),
+            DataPath = providerInfo.Extensions.VectorDBDataPath
+                ?? Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb", "data")
         };
 
-        _transport =
-            new ChromaTransport(
-                _options);
+        _serverManager = new ChromaServerManager( );
+        _transport = new ChromaTransport(_options);
     }
 
     /// <summary>
@@ -37,19 +33,16 @@ public sealed class ChromaDatabase : IVectorDatabase
     /// <param name="name">The name of the collection to get or create.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task<IVectorCollection> GetOrCreateCollectionAsync(string name,
-        CancellationToken cancellationToken = default)
+    public async Task<IVectorCollection> GetOrCreateCollectionAsync(string name, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var path =
-            BuildCollectionsPath();
+        await EnsureServerAsync(cancellationToken);
+
+        var path = BuildCollectionsPath();
 
         var response =
-            await _transport.PostAsync<
-                ChromaCreateCollectionRequest,
-                ChromaCollectionDto>(
-                path,
+            await _transport.PostAsync<ChromaCreateCollectionRequest, ChromaCollectionDto>(path,
                 new ChromaCreateCollectionRequest
                 {
                     Name = name,
@@ -57,11 +50,7 @@ public sealed class ChromaDatabase : IVectorDatabase
                 },
                 cancellationToken);
 
-        return new ChromaCollection(
-            response.Id,
-            response.Name,
-            _transport,
-            _options);
+        return new ChromaCollection(response.Id, response.Name, _transport, _options, _serverManager);
     }
 
     /// <summary>
@@ -69,17 +58,13 @@ public sealed class ChromaDatabase : IVectorDatabase
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task representing the asynchronous operation.</returns>
-    public async Task<IReadOnlyList<string>> GetCollectionsAsync(
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> GetCollectionsAsync(CancellationToken cancellationToken = default)
     {
-        var collections =
-            await _transport.GetAsync<
-                List<ChromaCollectionDto>>(
-                BuildCollectionsPath(),
-                cancellationToken);
+        await EnsureServerAsync(cancellationToken);
 
-        return collections
-            .Select(x => x.Name)
+        var collections = await _transport.GetAsync<List<ChromaCollectionDto>>(BuildCollectionsPath(), cancellationToken);
+
+        return collections.Select(x => x.Name)
             .ToArray();
     }
 
@@ -93,12 +78,16 @@ public sealed class ChromaDatabase : IVectorDatabase
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var escaped =
-            Uri.EscapeDataString(name);
+        await EnsureServerAsync(cancellationToken);
 
-        await _transport.DeleteAsync(
-            $"{BuildCollectionsPath()}/{escaped}",
-            cancellationToken);
+        var escaped = Uri.EscapeDataString(name);
+
+        await _transport.DeleteAsync($"{BuildCollectionsPath()}/{escaped}", cancellationToken);
+    }
+
+    private Task EnsureServerAsync(CancellationToken cancellationToken)
+    {
+        return _serverManager.EnsureRunningAsync(_options, cancellationToken);
     }
 
     /// <summary>
@@ -106,15 +95,9 @@ public sealed class ChromaDatabase : IVectorDatabase
     /// </summary>
     private string BuildCollectionsPath()
     {
-        var tenant =
-            Uri.EscapeDataString(
-                _options.Tenant);
+        var tenant = Uri.EscapeDataString(_options.Tenant);
+        var database = Uri.EscapeDataString(_options.Database);
 
-        var database =
-            Uri.EscapeDataString(
-                _options.Database);
-
-        return
-            $"api/v2/tenants/{tenant}/databases/{database}/collections";
+        return $"api/v2/tenants/{tenant}/databases/{database}/collections";
     }
 }

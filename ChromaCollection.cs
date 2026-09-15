@@ -7,15 +7,17 @@ public sealed class ChromaCollection : IVectorCollection
     private readonly string _id;
     private readonly ChromaTransport _transport;
     private readonly ChromaOptions _options;
+    private readonly ChromaServerManager _serverManager;
 
     public string Name { get; }
 
-    internal ChromaCollection(string id, string name, ChromaTransport transport, ChromaOptions options)
+    internal ChromaCollection(string id, string name, ChromaTransport transport, ChromaOptions options, ChromaServerManager serverManager)
     {
         _id = id;
         Name = name;
         _transport = transport;
         _options = options;
+        _serverManager = serverManager;
     }
 
     /// <summary>
@@ -28,9 +30,7 @@ public sealed class ChromaCollection : IVectorCollection
     {
         ArgumentNullException.ThrowIfNull(record);
 
-        return UpsertAsync(
-            [record],
-            cancellationToken);
+        return UpsertAsync([record], cancellationToken);
     }
 
     /// <summary>
@@ -44,26 +44,22 @@ public sealed class ChromaCollection : IVectorCollection
     {
         ArgumentNullException.ThrowIfNull(records);
 
-        var items =
-            records.ToArray();
+        await _serverManager.EnsureRunningAsync(_options, cancellationToken);
+
+        var items = records.ToArray();
 
         if (items.Length == 0)
         {
-            throw new ArgumentException(
-                "At least one vector record is required.",
-                nameof(records));
+            throw new ArgumentException("At least one vector record is required.", nameof(records));
         }
 
         foreach (var item in items)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(
-                item.Id);
+            ArgumentException.ThrowIfNullOrWhiteSpace(item.Id);
 
             if (item.Vector.Length == 0)
             {
-                throw new ArgumentException(
-                    $"Vector '{item.Id}' contains no dimensions.",
-                    nameof(records));
+                throw new ArgumentException($"Vector '{item.Id}' contains no dimensions.", nameof(records));
             }
         }
 
@@ -73,49 +69,23 @@ public sealed class ChromaCollection : IVectorCollection
          *
          * Catch obvious batch mismatches client-side.
          */
-        var dimensions =
-            items[0].Vector.Length;
+        var dimensions = items[0].Vector.Length;
 
-        if (items.Any(
-                x => x.Vector.Length != dimensions))
+        if (items.Any(x => x.Vector.Length != dimensions))
         {
-            throw new ArgumentException(
-                "All vectors in an upsert batch must have the same dimensions.",
-                nameof(records));
+            throw new ArgumentException("All vectors in an upsert batch must have the same dimensions.", nameof(records));
         }
 
-        var request =
-            new ChromaUpsertRequest
-            {
-                Ids =
-                    items
-                        .Select(x => x.Id)
-                        .ToArray(),
+        var request = new ChromaUpsertRequest
+        {
+            Ids = items.Select(x => x.Id).ToArray(),
+            Embeddings = items.Select(x => x.Vector).ToArray(),
+            Documents = items.Select(x => x.Document).ToArray(),
+            Metadatas = items.Select(x => x.Metadata.Count == 0 ? null
+                            : new Dictionary<string, object?>(x.Metadata)).ToArray()
+        };
 
-                Embeddings =
-                    items
-                        .Select(x => x.Vector)
-                        .ToArray(),
-
-                Documents =
-                    items
-                        .Select(x => x.Document)
-                        .ToArray(),
-
-                Metadatas =
-                    items
-                        .Select(x =>
-                            x.Metadata.Count == 0
-                                ? null
-                                : new Dictionary<string, object?>(
-                                    x.Metadata))
-                        .ToArray()
-            };
-
-        await _transport.PostAsync(
-            BuildRecordPath("upsert"),
-            request,
-            cancellationToken);
+        await _transport.PostAsync(BuildRecordPath("upsert"), request, cancellationToken);
     }
 
     /// <summary>
@@ -127,10 +97,11 @@ public sealed class ChromaCollection : IVectorCollection
     /// <returns>A task representing the asynchronous operation.</returns>
     /// <exception cref="ArgumentException"></exception>
     /// <exception cref="ArgumentOutOfRangeException"></exception>
-    public async Task<IReadOnlyList<VectorSearchResult>> SearchAsync(ReadOnlyMemory<float> vector, int limit = 10,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<VectorSearchResult>> SearchAsync(ReadOnlyMemory<float> vector, int limit = 10, CancellationToken cancellationToken = default)
     {
-        if (vector.IsEmpty)
+        await _serverManager.EnsureRunningAsync(_options, cancellationToken);
+
+        if ( vector.IsEmpty)
         {
             throw new ArgumentException(
                 "Query vector cannot be empty.",
@@ -143,21 +114,13 @@ public sealed class ChromaCollection : IVectorCollection
                 nameof(limit));
         }
 
-        var request =
-            new ChromaQueryRequest
-            {
-                QueryEmbeddings =
-                [
-                    vector.ToArray()
-                ],
+        var request = new ChromaQueryRequest
+        {
+            QueryEmbeddings = [vector.ToArray()],
+            NResults = limit
+        };
 
-                NResults = limit
-            };
-
-        var response =
-            await _transport.PostAsync<
-                ChromaQueryRequest,
-                ChromaQueryResponse>(
+        var response = await _transport.PostAsync<ChromaQueryRequest, ChromaQueryResponse>(
                 BuildRecordPath("query"),
                 request,
                 cancellationToken);
@@ -169,55 +132,33 @@ public sealed class ChromaCollection : IVectorCollection
         if (response.Ids.Length == 0)
             return [];
 
-        var ids =
-            response.Ids[0];
+        var ids = response.Ids[0];
 
-        var distances =
-            response.Distances is { Length: > 0 }
-                ? response.Distances[0]
-                : null;
+        var distances = response.Distances is { Length: > 0 } ? response.Distances[0] : null;
+        var documents = response.Documents is { Length: > 0 } ? response.Documents[0] : null;
+        var metadatas = response.Metadatas is { Length: > 0 } ? response.Metadatas[0] : null;
 
-        var documents =
-            response.Documents is { Length: > 0 }
-                ? response.Documents[0]
-                : null;
-
-        var metadatas =
-            response.Metadatas is { Length: > 0 }
-                ? response.Metadatas[0]
-                : null;
-
-        var results =
-            new List<VectorSearchResult>(
-                ids.Length);
+        var results = new List<VectorSearchResult>(ids.Length);
 
         for (var i = 0; i < ids.Length; i++)
         {
-            results.Add(
-                new VectorSearchResult
-                {
-                    Id = ids[i],
+            results.Add(new VectorSearchResult
+            {
+                Id = ids[i],
 
-                    Distance =
-                        distances is not null &&
-                        i < distances.Length &&
-                        distances[i] is double distance
-                            ? distance
-                            : double.NaN,
+                Distance = distances is not null && i < distances.Length &&
+                    distances[i] is double distance
+                        ? distance
+                        : double.NaN,
 
-                    Document =
-                        documents is not null &&
-                        i < documents.Length
-                            ? documents[i]
-                            : null,
+                Document = documents is not null && i < documents.Length
+                        ? documents[i]
+                        : null,
 
-                    Metadata =
-                        metadatas is not null &&
-                        i < metadatas.Length &&
-                        metadatas[i] is not null
-                            ? metadatas[i]!
-                            : new Dictionary<string, object?>()
-                });
+                Metadata = metadatas is not null && i < metadatas.Length && metadatas[i] is not null
+                        ? metadatas[i]!
+                        : new Dictionary<string, object?>()
+            });
         }
 
         return results;
@@ -233,34 +174,22 @@ public sealed class ChromaCollection : IVectorCollection
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
 
-        var request =
-            new ChromaDeleteRequest
-            {
-                Ids = [id]
-            };
+        await _serverManager.EnsureRunningAsync(_options, cancellationToken);
 
-        await _transport.PostAsync(
-            BuildRecordPath("delete"),
-            request,
-            cancellationToken);
+        var request = new ChromaDeleteRequest
+        {
+            Ids = [id]
+        };
+
+        await _transport.PostAsync(BuildRecordPath("delete"), request, cancellationToken);
     }
 
-    private string BuildRecordPath(
-        string operation)
+    private string BuildRecordPath(string operation)
     {
-        var tenant =
-            Uri.EscapeDataString(
-                _options.Tenant);
+        var tenant = Uri.EscapeDataString(_options.Tenant);
+        var database = Uri.EscapeDataString(_options.Database);
+        var collectionId = Uri.EscapeDataString(_id);
 
-        var database =
-            Uri.EscapeDataString(
-                _options.Database);
-
-        var collectionId =
-            Uri.EscapeDataString(
-                _id);
-
-        return
-            $"api/v2/tenants/{tenant}/databases/{database}/collections/{collectionId}/{operation}";
+        return $"api/v2/tenants/{tenant}/databases/{database}/collections/{collectionId}/{operation}";
     }
 }
