@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <PackageId>CrideLLMApi.VectorDB.ChromaDB</PackageId>
+    <Description>ChromaDB vector database extension for CrideLLMApi.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CrideLLMApi\CrideLLMApi.csproj" />
+  </ItemGroup>
+
+</Project>
