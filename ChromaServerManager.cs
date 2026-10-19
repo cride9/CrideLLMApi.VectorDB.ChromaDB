@@ -33,6 +33,23 @@ internal sealed class ChromaServerManager : IAsyncDisposable
                 return;
             }
 
+            Directory.CreateDirectory(options.RuntimePath);
+            Directory.CreateDirectory(options.DataPath);
+
+            if (!string.IsNullOrWhiteSpace(options.ExecutablePath))
+            {
+                StartServer(Path.GetFullPath(options.ExecutablePath), options);
+                await WaitUntilReadyAsync(options.EndPoint, cancellationToken);
+                return;
+            }
+
+            if (!options.InstallOnStartup)
+            {
+                throw new InvalidOperationException(
+                    "ChromaDB is unavailable and package installation at startup is disabled. " +
+                    "Configure ExecutablePath or start the local Chroma server beforehand.");
+            }
+
             var python = await FindPythonAsync(cancellationToken);
 
             if ( python is null )
@@ -43,15 +60,11 @@ internal sealed class ChromaServerManager : IAsyncDisposable
                     "Install Python or start ChromaDB manually.");
             }
 
-            Directory.CreateDirectory(options.RuntimePath);
-
-            Directory.CreateDirectory(options.DataPath);
-
             var venvPath =  Path.Combine(options.RuntimePath, "venv");
 
             await EnsureEnvironmentAsync(python, venvPath, cancellationToken);
 
-            StartServer(venvPath, options);
+            StartServer(GetChromaExecutable(venvPath), options);
 
             await WaitUntilReadyAsync(options.EndPoint, cancellationToken);
         }
@@ -162,12 +175,8 @@ internal sealed class ChromaServerManager : IAsyncDisposable
         }
     }
 
-    private void StartServer(string venvPath, ChromaOptions options)
+    private void StartServer(string executable, ChromaOptions options)
     {
-        var executable =
-            GetChromaExecutable(
-                venvPath);
-
         if ( !File.Exists(executable) )
         {
             throw new FileNotFoundException(
@@ -175,30 +184,25 @@ internal sealed class ChromaServerManager : IAsyncDisposable
                 executable);
         }
 
-        var arguments =
-            $"run " +
-            $"--host {options.EndPoint.Host} " +
-            $"--port {options.EndPoint.Port} " +
-            $"--path \"{options.DataPath}\"";
-
         Console.WriteLine($"[CrideLLMApi] Starting ChromaDB at {options.EndPoint}...");
 
+        var start = new ProcessStartInfo(executable)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = options.RuntimePath
+        };
+        foreach (var argument in new[] { "run", "--host", options.EndPoint.Host, "--port", options.EndPoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--path", options.DataPath })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        start.Environment["ANONYMIZED_TELEMETRY"] = "False";
+
         _process =
-            Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = executable,
-                    Arguments = arguments,
-
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-
-                    WorkingDirectory =
-                        options.RuntimePath
-                });
+            Process.Start(start);
 
         if ( _process is null )
         {
@@ -211,7 +215,7 @@ internal sealed class ChromaServerManager : IAsyncDisposable
         _process.OutputDataReceived +=
             (_, args) =>
             {
-                if ( !string.IsNullOrWhiteSpace(args.Data) )
+                if ( options.ForwardServerLogs && !string.IsNullOrWhiteSpace(args.Data) )
                     Console.WriteLine(
                         $"[ChromaDB] {args.Data}");
             };
@@ -219,7 +223,7 @@ internal sealed class ChromaServerManager : IAsyncDisposable
         _process.ErrorDataReceived +=
             (_, args) =>
             {
-                if ( !string.IsNullOrWhiteSpace(args.Data) )
+                if ( options.ForwardServerLogs && !string.IsNullOrWhiteSpace(args.Data) )
                     Console.WriteLine(
                         $"[ChromaDB] {args.Data}");
             };
@@ -255,7 +259,7 @@ internal sealed class ChromaServerManager : IAsyncDisposable
         try
         {
             using var client =
-                new HttpClient
+                new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
                 {
                     BaseAddress = endpoint,
                     Timeout =

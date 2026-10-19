@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace CrideLLMApi.VectorDB.ChromaDB;
 
-internal sealed class ChromaTransport
+internal sealed class ChromaTransport : IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ChromaOptions _options;
@@ -14,11 +14,13 @@ internal sealed class ChromaTransport
         PropertyNameCaseInsensitive = true
     };
 
+    public void Dispose() => _httpClient.Dispose();
+
     public ChromaTransport(ChromaOptions options)
     {
         _options = options;
 
-        _httpClient = new HttpClient
+        _httpClient = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
         {
             BaseAddress = options.EndPoint
         };

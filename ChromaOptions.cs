@@ -12,6 +12,15 @@ public sealed record ChromaOptions
 
     public bool AutoStart { get; init; } = true;
 
+    /// <summary>Use a preinstalled Chroma CLI, for example inside an offline container.</summary>
+    public string? ExecutablePath { get; init; }
+
+    /// <summary>Allow creating a virtual environment and downloading packages at startup.</summary>
+    public bool InstallOnStartup { get; init; } = true;
+
+    /// <summary>Forward the Chroma process output to the application console.</summary>
+    public bool ForwardServerLogs { get; init; } = true;
+
     public string RuntimePath { get; init; }
         = Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb");
 

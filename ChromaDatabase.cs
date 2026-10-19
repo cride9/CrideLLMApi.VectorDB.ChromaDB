@@ -4,27 +4,40 @@ using CrideLLMApi.VectorDB.ChromaDB.DTO;
 
 namespace CrideLLMApi.VectorDB.ChromaDB;
 
-public sealed class ChromaDatabase : IVectorDatabase
+public sealed class ChromaDatabase : IVectorDatabase, IAsyncDisposable
 {
     private readonly ChromaTransport _transport;
     private readonly ChromaOptions _options;
     private readonly ChromaServerManager _serverManager;
 
-    public ChromaDatabase(CrideApi api, ProviderInfo providerInfo)
+    public ChromaDatabase(CrideApi api, ProviderInfo providerInfo) : this(new ChromaOptions
     {
-        _options = new ChromaOptions
-        {
             EndPoint = providerInfo.Extensions.VectorDBEndPoint ?? new Uri("http://127.0.0.1:8000"),
             ApiKey = providerInfo.Extensions.VectorDBApiKey,
             AutoStart = providerInfo.Extensions.AutoStartVectorDB,
             RuntimePath = providerInfo.Extensions.VectorDBRuntimePath
                 ?? Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb"),
             DataPath = providerInfo.Extensions.VectorDBDataPath
-                ?? Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb", "data")
-        };
+                ?? Path.Combine(Environment.CurrentDirectory, ".cride", "chromadb", "data"),
+            ExecutablePath = providerInfo.Extensions.VectorDBExecutablePath,
+            InstallOnStartup = providerInfo.Extensions.InstallVectorDBOnStartup,
+            ForwardServerLogs = providerInfo.Extensions.ForwardVectorDBLogs
+    })
+    {
+    }
+
+    public ChromaDatabase(ChromaOptions options)
+    {
+        _options = options;
 
         _serverManager = new ChromaServerManager( );
         _transport = new ChromaTransport(_options);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _serverManager.DisposeAsync();
+        _transport.Dispose();
     }
 
     /// <summary>
