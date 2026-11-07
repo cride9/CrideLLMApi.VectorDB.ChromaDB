@@ -12,6 +12,9 @@ public sealed record ChromaOptions
 
     public bool AutoStart { get; init; } = true;
 
+    /// <summary>Reject an already running server whose data directory cannot be verified.</summary>
+    public bool RequireManagedServer { get; init; }
+
     /// <summary>Use a preinstalled Chroma CLI, for example inside an offline container.</summary>
     public string? ExecutablePath { get; init; }
 

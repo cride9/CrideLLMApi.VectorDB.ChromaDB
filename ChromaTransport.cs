@@ -97,14 +97,7 @@ internal sealed class ChromaTransport : IDisposable
         if (response.IsSuccessStatusCode)
             return;
 
-        var body =
-            await response.Content.ReadAsStringAsync(
-                cancellationToken);
-
-        throw new HttpRequestException(
-            $"ChromaDB request failed: " +
-            $"{(int)response.StatusCode} {response.ReasonPhrase}\n" +
-            body);
+        throw new HttpRequestException("ChromaDB request failed.", null, response.StatusCode);
     }
 
     /// <summary>
@@ -124,14 +117,7 @@ internal sealed class ChromaTransport : IDisposable
         if (response.IsSuccessStatusCode)
             return;
 
-        var body =
-            await response.Content.ReadAsStringAsync(
-                cancellationToken);
-
-        throw new HttpRequestException(
-            $"ChromaDB request failed: " +
-            $"{(int)response.StatusCode} {response.ReasonPhrase}\n" +
-            body);
+        throw new HttpRequestException("ChromaDB request failed.", null, response.StatusCode);
     }
 
     /// <summary>
@@ -148,14 +134,7 @@ internal sealed class ChromaTransport : IDisposable
     {
         if (!response.IsSuccessStatusCode)
         {
-            var body =
-                await response.Content.ReadAsStringAsync(
-                    cancellationToken);
-
-            throw new HttpRequestException(
-                $"ChromaDB request failed: " +
-                $"{(int)response.StatusCode} {response.ReasonPhrase}\n" +
-                body);
+            throw new HttpRequestException("ChromaDB request failed.", null, response.StatusCode);
         }
 
         await using var stream =

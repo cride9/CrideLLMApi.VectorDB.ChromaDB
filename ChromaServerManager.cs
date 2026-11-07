@@ -13,6 +13,7 @@ internal sealed class ChromaServerManager : IAsyncDisposable
     {
         if ( await IsAvailableAsync(options.EndPoint, cancellationToken) )
         {
+            EnsureManagedServer(options);
             return;
         }
 
@@ -30,6 +31,7 @@ internal sealed class ChromaServerManager : IAsyncDisposable
             // Another request may have started it while waiting.
             if ( await IsAvailableAsync(options.EndPoint, cancellationToken) )
             {
+                EnsureManagedServer(options);
                 return;
             }
 
@@ -72,6 +74,12 @@ internal sealed class ChromaServerManager : IAsyncDisposable
         {
             _startupLock.Release( );
         }
+    }
+
+    private void EnsureManagedServer(ChromaOptions options)
+    {
+        if (options.RequireManagedServer && (!_startedByUs || _process is null || _process.HasExited))
+            throw new InvalidOperationException("ChromaDB port is already occupied; its data directory cannot be verified.");
     }
 
     private static async Task<PythonCommand?> FindPythonAsync(CancellationToken cancellationToken)
